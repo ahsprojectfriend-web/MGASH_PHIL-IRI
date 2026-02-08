@@ -28,7 +28,11 @@
         .option-btn { padding: 18px; border: 1px solid #dadce0; border-radius: 12px; background: white; cursor: pointer; font-size: 1.1rem; text-align: left; width: 100%; margin-bottom: 10px; transition: 0.2s; }
         .option-btn:hover { background: var(--ahs-light); border-color: var(--ahs-maroon); transform: translateX(5px); }
         
+        /* Selection Highlight */
+        .option-btn.selected { background-color: #fee2e2; border-color: #ef4444; color: #b91c1c; font-weight: bold; }
+
         .btn-primary { background: var(--ahs-maroon); color: white; padding: 20px; border-radius: 50px; cursor: pointer; border: none; font-weight: bold; width: 100%; text-transform: uppercase; }
+        .btn-primary:disabled { background: #ccc; cursor: not-allowed; }
         .btn-db { background: #28a745; margin-top: 20px; }
         
         .summary-card { border: 3px solid var(--ahs-maroon); border-radius: 20px; padding: 30px; margin-bottom: 20px; text-align: center; background: white; }
@@ -39,6 +43,14 @@
         .speak-btn:hover { transform: scale(1.1); background: #e6c200; }
         .flex-row { display: flex; align-items: flex-start; margin-bottom: 15px; }
         .opt-row { display: flex; align-items: center; width: 100%; margin-bottom: 8px; }
+
+        /* Navigation Bar Styles */
+        .nav-container { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; justify-content: center; }
+        .nav-btn { width: 35px; height: 35px; border-radius: 50%; border: 2px solid #dadce0; background: white; cursor: pointer; font-weight: bold; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
+        .nav-btn.active { border-color: var(--ahs-maroon); background: var(--ahs-light); color: var(--ahs-maroon); }
+        .nav-btn.answered { background: #ef4444; border-color: #b91c1c; color: white; }
+        
+        .nav-controls { display: flex; gap: 15px; margin-top: 20px; }
     </style>
 </head>
 <body>
@@ -81,10 +93,16 @@
     </div>
 
     <div id="test-step" style="display:none;">
+        <div id="question-nav" class="nav-container"></div>
         <div id="step-indicator"></div>
         <h2 id="part-label" style="text-align:center; color:var(--ahs-maroon); margin-bottom:15px;"></h2>
         <div id="passage-reference"></div>
         <div id="quiz-area"></div>
+        
+        <div class="nav-controls">
+            <button id="prev-btn" class="btn-primary" style="background:#5f6368" onclick="prevQuestion()">Previous</button>
+            <button id="next-btn" class="btn-primary" onclick="handleNext()">Next Question</button>
+        </div>
     </div>
 
     <div id="results-step" style="display:none;">
@@ -108,7 +126,6 @@
 <script>
     const FINAL_GS_LINK = "https://script.google.com/macros/s/AKfycbz-tWZVJfL7jc1hEDbEJfpbNV2QyG1IcoJEiJf869uSUCdq8YD7vrfRlwyDkGaEwHilfA/exec";
 
-    // ... (examData remains exactly as you had it) ...
     const examData = {
         4: { title: "MARIAN'S EXPERIMENT", text: "Marian came home from school. She went to the kitchen and saw her mother cooking. 'Mama, do we have mongo seeds?' asked Marian. 'I will do an experiment.' \n\n'Yes, we have some in the cabinet,' answered Mama. \n\nMarian got some seeds and planted them in a wooden box. She watered the seeds every day. She made sure they got enough sun. After three days, Marian was happy to see stems and leaves sprouting. Her mongo seeds grew into young plants.", questions: [
             { q: "What did Marian look for in the kitchen?", options: ["a. mango seeds", "b. mongo seeds", "c. melon seeds"], correct: 1 },
@@ -191,6 +208,7 @@
     let totalTestsInSequence = 1;
     let finalPayload = {};
     let currentAudio = new Audio();
+    let currentAnswers = []; // Added to track all answers for validation
 
     function playFile(fileName) {
         currentAudio.pause();
@@ -207,11 +225,30 @@
 
     function runGradeSequence(level) {
         activeGrade = level; currentQIdx = 0; currentScore = 0;
+        currentAnswers = new Array(examData[activeGrade].questions.length).fill(null); // Reset answers
         document.getElementById('transition-step').style.display = 'none';
         document.getElementById('test-step').style.display = 'block';
         document.getElementById('step-indicator').style.display = 'block';
+        generateNav(); // Create 1 2 3 bar
         updateStepCounter();
         loadQuestion();
+    }
+
+    function generateNav() {
+        const nav = document.getElementById('question-nav');
+        nav.innerHTML = examData[activeGrade].questions.map((_, i) => `
+            <button id="nav-btn-${i}" class="nav-btn" onclick="jumpToQuestion(${i})">${i + 1}</button>
+        `).join('');
+    }
+
+    function updateNavStyles() {
+        examData[activeGrade].questions.forEach((_, i) => {
+            const btn = document.getElementById(`nav-btn-${i}`);
+            if(btn){
+                btn.classList.toggle('active', i === currentQIdx);
+                btn.classList.toggle('answered', currentAnswers[i] !== null);
+            }
+        });
     }
 
     function updateStepCounter() {
@@ -225,7 +262,6 @@
 
         document.getElementById('part-label').innerText = `Assessment: Grade ${activeGrade}`;
         
-        // Passage Section
         let passageHtml = isAudioLevel 
             ? `<div class="flex-row">
                 <button class="speak-btn" onclick="playFile('audio/GRADE${activeGrade}.mp3')">🔊</button>
@@ -234,7 +270,6 @@
             : `<div>${exam.text}</div>`;
         document.getElementById('passage-reference').innerHTML = passageHtml;
 
-        // Quiz Section - Simplified paths to just look in 'audio/' folder
         let quizHtml = `
             <div class="question-card">
                 <div class="flex-row">
@@ -245,25 +280,66 @@
                     ${q.options.map((opt, i) => {
                         const letters = ['A', 'B', 'C', 'D'];
                         const letter = letters[i];
+                        const isSelected = currentAnswers[currentQIdx] === i ? 'selected' : '';
                         return `
                         <div class="opt-row">
                             ${isAudioLevel ? `<button class="speak-btn" onclick="playFile('audio/G${activeGrade}Q${currentQIdx + 1}${letter}.mp3')">🔊</button>` : ''}
-                            <button class="option-btn" style="margin-bottom:0;" onclick="handleChoice(${i})">${opt}</button>
+                            <button class="option-btn ${isSelected}" style="margin-bottom:0;" onclick="handleChoice(${i})">${opt}</button>
                         </div>`;
                     }).join('')}
                 </div>
             </div>`;
         document.getElementById('quiz-area').innerHTML = quizHtml;
         
+        // Navigation Buttons Logic
+        const nextBtn = document.getElementById('next-btn');
+        const prevBtn = document.getElementById('prev-btn');
+        prevBtn.style.visibility = currentQIdx === 0 ? 'hidden' : 'visible';
+        
+        if (currentQIdx === exam.questions.length - 1) {
+            nextBtn.innerText = "Submit Assessment";
+            const allAnswered = currentAnswers.every(a => a !== null);
+            nextBtn.disabled = !allAnswered;
+        } else {
+            nextBtn.innerText = "Next Question";
+            nextBtn.disabled = false;
+        }
+
         document.getElementById('passage-reference').scrollTop = 0;
+        updateNavStyles();
     }
 
     function handleChoice(idx) {
         currentAudio.pause(); 
-        if(idx === examData[activeGrade].questions[currentQIdx].correct) currentScore++;
-        currentQIdx++;
-        if(currentQIdx < examData[activeGrade].questions.length) loadQuestion();
-        else processResults();
+        currentAnswers[currentQIdx] = idx; // Save choice
+        loadQuestion(); // Refresh to show highlight and update nav
+    }
+
+    function jumpToQuestion(idx) {
+        currentQIdx = idx;
+        loadQuestion();
+    }
+
+    function prevQuestion() {
+        if(currentQIdx > 0) {
+            currentQIdx--;
+            loadQuestion();
+        }
+    }
+
+    function handleNext() {
+        const exam = examData[activeGrade];
+        if(currentQIdx < exam.questions.length - 1) {
+            currentQIdx++;
+            loadQuestion();
+        } else {
+            // Final check of answers before processing
+            currentScore = 0;
+            exam.questions.forEach((q, i) => {
+                if(currentAnswers[i] === q.correct) currentScore++;
+            });
+            processResults();
+        }
     }
 
     function processResults() {
